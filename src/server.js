@@ -27,6 +27,7 @@ if (config.isProd) {
   }
 }
 
+
 const server = app.listen(config.port, () => {
   console.log(`[Server] Dental Clinic API running on http://localhost:${config.port} (${config.nodeEnv})`);
 });

@@ -68,6 +68,7 @@ app.use('/api/v1', (req, res, next) => {
   return next();
 });
 
+
 const uploadsPath = path.resolve(__dirname, '../', config.uploads.dir);
 if (!fs.existsSync(uploadsPath)) fs.mkdirSync(uploadsPath, { recursive: true });
 app.use('/uploads', express.static(uploadsPath, { maxAge: '7d', immutable: true }));
