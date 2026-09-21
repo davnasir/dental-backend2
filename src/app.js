@@ -42,7 +42,7 @@ app.disable('x-powered-by');
 // The WebSocket server enforces the same check for /realtime connections.
 app.use(originGuard);
 
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(
   cors({
     origin(origin, cb) {
