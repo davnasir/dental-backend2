@@ -12,6 +12,4 @@ ENV PORT=5000
 COPY --from=build /app /app
 RUN mkdir -p /app/uploads
 EXPOSE 5000
-# server.js connects to MongoDB and auto-seeds a fresh (empty) database
-# with demo data on startup when SEED_ADMIN_PASSWORD is set.
 CMD ["node", "src/server.js"]
