@@ -1,24 +1,29 @@
 import { config } from '../config/index.js';
 
-const buildMessage = ({ patientName, appointmentNumber, doctorName, treatment, date, time }) => {
+// Rendered as a "Label:\nvalue" block each. A section with no value is dropped
+// entirely rather than sent as a dangling label or a literal "undefined".
+const SECTIONS = [
+  ['Appointment', 'appointmentNumber'],
+  ['Doctor', 'doctorName'],
+  ['Branch', 'branchName'],
+  ['Treatment', 'treatment'],
+  ['Date', 'date'],
+  ['Time', 'time'],
+];
+
+const buildMessage = (payload) => {
+  const { patientName, ...rest } = payload;
+  const blocks = SECTIONS
+    .map(([label, key]) => [label, rest[key]])
+    .filter(([, value]) => value !== null && value !== undefined && value !== '')
+    .map(([label, value]) => `${label}:\n${value}`)
+    .join('\n\n');
+
   return `Hello ${patientName},
 
 Your dental appointment has been requested.
 
-Appointment:
-${appointmentNumber}
-
-Doctor:
-${doctorName}
-
-Treatment:
-${treatment}
-
-Date:
-${date}
-
-Time:
-${time}
+${blocks}
 
 Thank you.
 `;

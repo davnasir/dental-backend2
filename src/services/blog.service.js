@@ -13,6 +13,8 @@ const publicBlogSelect = {
   author: true,
   status: true,
   readTime: true,
+  seoTitle: true,
+  seoDescription: true,
   publishedAt: true,
   createdAt: true,
 };

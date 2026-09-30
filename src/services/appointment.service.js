@@ -16,7 +16,9 @@ export const generateAppointmentNumber = async () => {
   return `${prefix}${String(next).padStart(6, '0')}`;
 };
 
-const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+export const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+const SHORT_DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 const DEFAULT_WORKING_HOURS = {
   saturday: { start: '10:00', end: '21:00' },
@@ -28,8 +30,71 @@ const DEFAULT_WORKING_HOURS = {
   friday: { start: '16:00', end: '21:00' },
 };
 
+const SLOT_STEP_MINUTES = 30;
+
+// A booking only holds its slot for two days. Once two days have elapsed the
+// hold expires and the same doctor/branch/date/time becomes bookable again, so a
+// stale or abandoned request cannot lock a slot out forever. `gt` (not `gte`)
+// means the hold is released the moment it reaches exactly two days old.
+const SLOT_HOLD_DAYS = 2;
+
+const slotHoldCutoff = () => {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - SLOT_HOLD_DAYS);
+  return cutoff;
+};
+
+const CLOSED_MARKERS = new Set(['', 'closed', 'close', 'off', 'none', 'null', '-', 'holiday']);
+
+// Accepts "sunday" | "sun" | "sat" | "0".."6" -> full lowercase day name.
+const normalizeDayKey = (key) => {
+  const k = String(key ?? '').trim().toLowerCase();
+  if (!k) return null;
+  if (/^[0-6]$/.test(k)) return DAYS[Number(k)];
+  const idx = SHORT_DAYS.indexOf(k.slice(0, 3));
+  return idx === -1 ? null : DAYS[idx];
+};
+
+const normalizeTime = (value) => {
+  const m = String(value ?? '').trim().match(/^(\d{1,2}):([0-5]\d)$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  if (h > 24) return null;
+  return `${String(h).padStart(2, '0')}:${m[2]}`;
+};
+
+// Accepts { start, end } objects and "10:00-21:00" strings. Returns null when the
+// day is explicitly marked closed so admins can switch a branch off per weekday.
+const parseHourValue = (value) => {
+  if (value === null || value === undefined || value === false) return null;
+
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (CLOSED_MARKERS.has(raw.toLowerCase())) return null;
+    const m = raw.match(/^(\d{1,2}:[0-5]\d)\s*(?:-|–|—|to)\s*(\d{1,2}:[0-5]\d)$/i);
+    if (!m) return null;
+    const start = normalizeTime(m[1]);
+    const end = normalizeTime(m[2]);
+    return start && end ? { start, end } : null;
+  }
+
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    const start = normalizeTime(value.start);
+    const end = normalizeTime(value.end);
+    return start && end ? { start, end } : null;
+  }
+
+  return null;
+};
+
+const isClosedMarker = (value) => {
+  if (value === null || value === undefined || value === false) return true;
+  if (typeof value === 'string') return CLOSED_MARKERS.has(value.trim().toLowerCase());
+  return false;
+};
+
 const toMinutes = (t) => {
-  const [h, m] = t.split(':').map(Number);
+  const [h, m] = String(t).split(':').map(Number);
   return h * 60 + m;
 };
 
@@ -39,25 +104,45 @@ const fromMinutes = (min) => {
   return `${hh}:${mm}`;
 };
 
-const getWorkingHoursFor = (entity, date) => {
-  const day = DAYS[new Date(`${date}T00:00:00`).getDay()];
-  const custom = entity?.workingHours || {};
-  return custom[day] || DEFAULT_WORKING_HOURS[day] || null;
+export const dayNameFor = (date) => DAYS[new Date(`${date}T00:00:00`).getDay()];
+
+// Returns the hours for a day, or null when the day is explicitly closed.
+// Unparseable values fall back to the defaults rather than silently closing
+// the branch, so a typo cannot take a branch offline.
+export const getWorkingHoursFor = (entity, date) => {
+  const day = dayNameFor(date);
+  const raw = entity?.workingHours;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const match = Object.entries(raw).find(([key]) => normalizeDayKey(key) === day);
+    if (match) {
+      if (isClosedMarker(match[1])) return null;
+      const parsed = parseHourValue(match[1]);
+      if (parsed) return parsed;
+    }
+  }
+  return DEFAULT_WORKING_HOURS[day] || null;
 };
 
-// Combine doctor + chamber availability for a given date into start/end minutes.
-const availabilityWindow = (doctor, chamber, date) => {
+// Combine doctor + chamber (branch) availability for a given date into start/end
+// minutes. A branch is only open when the doctor and the branch overlap, so
+// booking can never be offered or accepted outside the branch's operating hours.
+export const availabilityWindow = (doctor, chamber, date) => {
   const doctorH = getWorkingHoursFor(doctor, date);
   const chamberH = chamber ? getWorkingHoursFor(chamber, date) : null;
 
-  if (!doctorH && !chamberH) return null;
-  let start = doctorH ? toMinutes(doctorH.start) : toMinutes(chamberH.start);
-  let end = doctorH ? toMinutes(doctorH.end) : toMinutes(chamberH.end);
+  // A selected branch that is closed leaves nothing bookable, even if the
+  // doctor is working elsewhere that day.
+  if (chamber && !chamberH) return null;
+  if (!doctorH) return null;
 
-  if (doctorH && chamberH) {
+  let start = toMinutes(doctorH.start);
+  let end = toMinutes(doctorH.end);
+
+  if (chamberH) {
     start = Math.max(start, toMinutes(chamberH.start));
     end = Math.min(end, toMinutes(chamberH.end));
   }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
   return { start, end };
 };
 
@@ -86,14 +171,19 @@ export const validateAppointmentWindow = async ({
     ? await prisma.chamber.findUnique({ where: { id: chamberId } })
     : null;
 
+  const branchName = chamber?.name || null;
+  const closedOnDay = branchName
+    ? `${branchName} is closed on this day. Please select another date or branch.`
+    : 'Clinic is closed on this day. Please select another date.';
+
   const window = availabilityWindow(doctor, chamber, date);
-  if (!window) throw new ApiError(400, 'Clinic is closed on this day. Please select another date.');
+  if (!window) throw new ApiError(400, closedOnDay);
 
   if (isDayOff(doctor, date)) {
     throw new ApiError(400, 'Doctor is on leave on this date. Please select another date.');
   }
   if (chamber && isDayOff(chamber, date)) {
-    throw new ApiError(400, 'Chamber is closed on this date. Please select another date.');
+    throw new ApiError(400, closedOnDay);
   }
 
   const timeMin = toMinutes(time);
@@ -105,7 +195,7 @@ export const validateAppointmentWindow = async ({
   if (!within) {
     throw new ApiError(
       400,
-      `Selected time is outside the chamber's opening hours (${fromMinutes(window.start)} - ${fromMinutes(window.end)}).`
+      `Selected time is outside the operating hours of ${branchName || 'the clinic'} (${fromMinutes(window.start)} - ${fromMinutes(window.end)}).`
     );
   }
 
@@ -116,6 +206,7 @@ export const validateAppointmentWindow = async ({
       appointmentDate: new Date(`${date}T00:00:00`),
       appointmentTime: time,
       status: { notIn: ['CANCELLED', 'NO_SHOW'] },
+      createdAt: { gt: slotHoldCutoff() },
       ...(excludeAppointmentId ? { id: { not: excludeAppointmentId } } : {}),
     },
   });
@@ -329,9 +420,12 @@ export const getAvailableSlots = async (doctorId, date, chamberId = null) => {
     if (!chamber) throw new ApiError(404, 'Chamber not found');
   }
 
-  const window = availabilityWindow(doctor, chamber, date);
-  if (!window || isDayOff(doctor, date) || (chamber && isDayOff(chamber, date))) {
-    return { slots: [], workingHours: null };
+  const day = dayNameFor(date);
+  const dayOff = isDayOff(doctor, date) || (chamber && isDayOff(chamber, date));
+  const window = dayOff ? null : availabilityWindow(doctor, chamber, date);
+
+  if (!window) {
+    return { slots: [], workingHours: null, closed: true, day, branch: chamber?.name || null };
   }
 
   const booked = await prisma.appointment.findMany({
@@ -340,18 +434,26 @@ export const getAvailableSlots = async (doctorId, date, chamberId = null) => {
       chamberId: chamberId ? Number(chamberId) : null,
       appointmentDate: new Date(`${date}T00:00:00`),
       status: { notIn: ['CANCELLED', 'NO_SHOW'] },
+      // Mirrors the booking check: a hold older than two days no longer blocks
+      // the slot, so the form offers exactly what createAppointment will accept.
+      createdAt: { gt: slotHoldCutoff() },
     },
     select: { appointmentTime: true },
   });
   const bookedSet = new Set(booked.map((b) => b.appointmentTime));
 
   const slots = [];
-  let min = window.start;
-  while (min <= window.end) {
+  for (let min = window.start; min <= window.end; min += SLOT_STEP_MINUTES) {
     const time = fromMinutes(min);
     const isPast = new Date(`${date}T${time}:00`) <= new Date();
     if (!bookedSet.has(time) && !isPast) slots.push(time);
-    min += 30;
   }
-  return { slots, workingHours: { start: fromMinutes(window.start), end: fromMinutes(window.end) } };
+
+  return {
+    slots,
+    workingHours: { start: fromMinutes(window.start), end: fromMinutes(window.end) },
+    closed: false,
+    day,
+    branch: chamber?.name || null,
+  };
 };

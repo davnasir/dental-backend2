@@ -5,12 +5,17 @@ import { prescriptionSchema, prescriptionUpdateSchema } from '../validators/pres
 import {
   getPrescriptions,
   getPrescriptionById,
+  getVerifyPrescription,
   postPrescription,
   putPrescription,
   removePrescription,
 } from '../controllers/prescription.controller.js';
 
 const router = express.Router();
+
+// Public: backs the QR code printed on the prescription pad, so it must be
+// registered before the auth guard below.
+router.get('/verify/:code', getVerifyPrescription);
 
 router.use(protect, can('SUPER_ADMIN', 'ADMIN', 'DOCTOR'));
 

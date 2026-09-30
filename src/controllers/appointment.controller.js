@@ -12,7 +12,8 @@ import { logAudit, getClientIp } from '../services/auditLog.service.js';
 import { createNotification } from '../services/notification.service.js';
 import { sendAppointmentWhatsApp } from '../services/whatsapp.service.js';
 import { sendAppointmentEmail } from '../services/email.service.js';
-import { toLocalDateStr } from '../utils/date.js';
+import { sendAppointmentBookedSms, sendAppointmentConfirmedSms } from '../services/sms.service.js';
+import { toLocalDateStr, to12hTimeStr } from '../utils/date.js';
 
 const notificationMeta = (appointment) => ({
   appointmentId: appointment.id,
@@ -20,10 +21,16 @@ const notificationMeta = (appointment) => ({
   patientName: [appointment.patient?.firstName, appointment.patient?.lastName].filter(Boolean).join(' '),
   patientPhone: appointment.patient?.phone,
   doctorName: appointment.doctor?.name,
+  branchName: appointment.chamber?.name || '',
   date: toLocalDateStr(appointment.appointmentDate),
-  time: appointment.appointmentTime,
+  time: to12hTimeStr(appointment.appointmentTime),
   status: appointment.status,
 });
+
+// Notification lines are short, so the branch is appended only when the
+// appointment actually has one -- staff never see a dangling separator.
+const withBranch = (text, appointment) =>
+  (appointment.chamber?.name ? `${text} · ${appointment.chamber.name}` : text);
 
 export const getAppointments = async (req, res) => {
   const data = await listAppointments(req.query);
@@ -42,11 +49,14 @@ export const postAppointment = async (req, res) => {
   });
 
   await logAudit({ userId: req.user.id, action: 'APPOINTMENT_CREATED', entity: 'Appointment', entityId: appointment.id, ip: getClientIp(req) });
+  // Not awaited: the SMS is a side effect, and the gateway must never be able to
+  // delay or fail the booking response.
+  sendAppointmentBookedSms(appointment);
   await createNotification({
     broadcast: true,
     type: 'APPOINTMENT_NEW',
     title: 'New appointment booked',
-    message: `${appointment.appointmentNumber} for ${appointment.patient.firstName} ${appointment.patient.lastName}`,
+    message: withBranch(`${appointment.appointmentNumber} for ${appointment.patient.firstName} ${appointment.patient.lastName}`, appointment),
     link: `/admin/appointments/${appointment.id}`,
     meta: notificationMeta(appointment),
   });
@@ -66,18 +76,20 @@ export const publicBookAppointment = async (req, res) => {
     patientName: `${patient.firstName} ${patient.lastName}`.trim(),
     appointmentNumber: appointment.appointmentNumber,
     doctorName: appointment.doctor?.name,
+    branchName: appointment.chamber?.name || '',
     treatment: serviceName,
     date: toLocalDateStr(appointment.appointmentDate),
-    time: appointment.appointmentTime,
+    time: to12hTimeStr(appointment.appointmentTime),
   };
   const whatsappLink = sendAppointmentWhatsApp(waPayload);
 
   await logAudit({ userId: null, action: 'APPOINTMENT_PUBLIC_BOOKED', entity: 'Appointment', entityId: appointment.id, ip: getClientIp(req) });
+  sendAppointmentBookedSms(appointment);
   await createNotification({
     broadcast: true,
     type: 'APPOINTMENT_NEW',
     title: 'New public appointment requested',
-    message: `${appointment.appointmentNumber} for ${patient.firstName} ${patient.lastName}`,
+    message: withBranch(`${appointment.appointmentNumber} for ${patient.firstName} ${patient.lastName}`, appointment),
     link: `/admin/appointments/${appointment.id}`,
     meta: notificationMeta(appointment),
   });
@@ -105,25 +117,32 @@ export const putAppointment = async (req, res) => {
     broadcast: true,
     type: 'APPOINTMENT_UPDATED',
     title: 'Appointment rescheduled',
-    message: `${appointment.appointmentNumber} moved to ${toLocalDateStr(appointment.appointmentDate)} at ${appointment.appointmentTime}`,
+    message: withBranch(`${appointment.appointmentNumber} moved to ${toLocalDateStr(appointment.appointmentDate)} at ${to12hTimeStr(appointment.appointmentTime)}`, appointment),
     link: `/admin/appointments/${appointment.id}`,
   });
   return successResponse(res, 200, 'Appointment updated successfully', { appointment });
 };
 
 export const patchStatus = async (req, res) => {
-  const { appointment } = await changeAppointmentStatus(
+  const { appointment, previous } = await changeAppointmentStatus(
     req.params.id,
     req.body.status,
     req.body.cancellationReason
   );
   await logAudit({ userId: req.user.id, action: `APPOINTMENT_${req.body.status}`, entity: 'Appointment', entityId: appointment.id, ip: getClientIp(req) });
 
+  // Only on the transition into CONFIRMED. Re-saving an already-confirmed
+  // appointment (or bouncing it through other states) must not bill the patient
+  // for a second confirmation text.
+  if (req.body.status === 'CONFIRMED' && previous?.status !== 'CONFIRMED') {
+    sendAppointmentConfirmedSms(appointment);
+  }
+
   await createNotification({
     broadcast: true,
     type: `APPOINTMENT_${req.body.status}`,
     title: `Appointment ${req.body.status.toLowerCase().replace(/_/g, ' ')}`,
-    message: `${appointment.appointmentNumber} is now ${req.body.status.toLowerCase().replace(/_/g, ' ')}`,
+    message: withBranch(`${appointment.appointmentNumber} is now ${req.body.status.toLowerCase().replace(/_/g, ' ')}`, appointment),
     link: `/admin/appointments/${appointment.id}`,
   });
 

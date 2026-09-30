@@ -32,6 +32,23 @@ const server = app.listen(config.port, () => {
   console.log(`[Server] Dental Clinic API running on http://localhost:${config.port} (${config.nodeEnv})`);
 });
 
+// A port clash is a configuration mistake, not a crash. Without this listener it
+// escapes as a raw node:net stack trace that never says which process to stop.
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(
+      `\n[Server] Port ${config.port} is already in use -- another copy of the server is already running.\n` +
+      `         Find and stop it:\n` +
+      `           netstat -ano | findstr :${config.port}\n` +
+      `           taskkill /PID <pid> /F\n` +
+      `         Or set a different PORT in .env, then start again.\n`
+    );
+    process.exit(1);
+  }
+  console.error('[Server] Failed to start:', err);
+  process.exit(1);
+});
+
 initRealtime(server);
 
 process.on('unhandledRejection', (err) => {

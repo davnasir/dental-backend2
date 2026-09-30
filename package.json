@@ -8,8 +8,13 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
+    "postinstall": "node prisma/setup.js",
     "prisma:seed": "node prisma/seed.js",
-    "db:setup": "node prisma/seed.js"
+    "db:setup": "node prisma/setup.js",
+    "test:sms": "node scripts/sms-check.mjs && node scripts/sms-resilience.mjs && node scripts/mram-check.mjs",
+    "test:sms:panel": "node scripts/sms-panel-check.mjs",
+    "test:sms:api": "node scripts/sms-api-check.mjs",
+    "test:sms:e2e": "node scripts/sms-booking-e2e.mjs"
   },
   "prisma": {
     "seed": "node prisma/seed.js"

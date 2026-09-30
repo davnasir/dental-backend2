@@ -93,6 +93,7 @@ const RELATIONS = {
   prescription: {
     patient: ['patient', 'id', 'patientId', false],
     doctor: ['doctor', 'id', 'doctorId', false],
+    chamber: ['chamber', 'id', 'chamberId', false],
   },
   dentalRecord: { patient: ['patient', 'id', 'patientId', false] },
   invoice: {
@@ -530,3 +531,7 @@ const handler = {
 };
 const proxy = new Proxy({}, handler);
 export default proxy;
+
+// Exposed so feature services can manage indexes/TTL on a collection directly
+// (e.g. prescription retention) without opening a second Mongo connection.
+export { getDb, COLLECTIONS };

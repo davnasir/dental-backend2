@@ -35,14 +35,20 @@ async function seedSuperAdmin() {
   const name = process.env.SEED_ADMIN_NAME || 'Super Admin';
   if (!password) throw new Error('SEED_ADMIN_PASSWORD environment variable is required');
 
+  // Never reset the password of an admin that already exists. This seed runs
+  // automatically on `npm install`, so re-hashing on every run would silently
+  // lock out anyone who had changed it.
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) {
+    await prisma.user.update({ where: { id: existing.id }, data: { name, role: 'SUPER_ADMIN', status: 'ACTIVE' } });
+    console.log(`Super admin already exists, password left unchanged: ${email}`);
+    return existing;
+  }
+
   const hashed = await bcrypt.hash(password, 12);
-  await prisma.user.upsert({
-    where: { email },
-    update: { name, password: hashed, role: 'SUPER_ADMIN', status: 'ACTIVE' },
-    create: { name, email, password: hashed, role: 'SUPER_ADMIN', status: 'ACTIVE' },
-  });
+  await prisma.user.create({ data: { name, email, password: hashed, role: 'SUPER_ADMIN', status: 'ACTIVE' } });
   const admin = await prisma.user.findUnique({ where: { email } });
-  console.log(`Super admin ready: ${email}`);
+  console.log(`Super admin created: ${email}`);
   return admin;
 }
 
@@ -873,19 +879,23 @@ async function seedChambers() {
     thursday: { start: '10:00', end: '21:00' },
     friday: { start: '16:00', end: '21:00' },
   };
+  // Must match the two locations the public site advertises (see
+  // frontend/src/sections/ContactLocation.jsx). chamber.name is what patients
+  // are now told in the booking SMS/WhatsApp, so a placeholder name here sends
+  // them to a clinic that does not exist.
   const chambers = [
     {
-      name: 'Banani Branch (Main)',
-      address: 'Level 6, House 27, Road 11, Banani, Dhaka 1213',
-      phone: '+8801948921229',
+      name: 'Uttara Branch',
+      address: 'House#19 (1st floor), Lake Drive Road, Sector#07, Uttara, Dhaka-1230',
+      phone: '+8801966115115',
       workingHours: hours,
       status: 'ACTIVE',
       sortOrder: 1,
     },
     {
-      name: 'Mirpur Branch',
-      address: 'House 12, Block C, Section 2, Mirpur, Dhaka 1216',
-      phone: '+8801948921230',
+      name: 'Tongi Branch',
+      address: '54/A Dream Orchid Tower, 1st floor, Aouch para, College Road, Tongi, Gazipur',
+      phone: '+8801966115115',
       workingHours: hours,
       status: 'ACTIVE',
       sortOrder: 2,
@@ -948,10 +958,6 @@ async function seedSettings() {
     email: 'care@naholdental.com',
     hours: 'Sat - Thu: 10:00 AM - 9:00 PM',
     whatsappNumber: '8801948921229',
-  });
-  await upsert('booking_hours', {
-    weekend: { start: '10:00', end: '21:00' },
-    weekday: { start: '10:00', end: '21:00' },
   });
   await upsert('site_stats', {
     years: 12,

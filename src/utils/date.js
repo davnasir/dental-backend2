@@ -33,3 +33,20 @@ export const toLocalDateStr = (date) => {
 
 // Format a Date as a local YYYY-MM string.
 export const toLocalMonthStr = (date) => toLocalDateStr(date).slice(0, 7);
+
+// Convert a stored "HH:mm" appointment time to 12-hour "h:mm AM/PM".
+// Appointments are validated and persisted as 24-hour (see
+// appointment.validator.js), but patients read 12-hour clocks, so every
+// patient-facing message and the admin UI go through this. Anything that is
+// not a well-formed 24-hour time is passed through untouched rather than
+// rendered as "NaN:NaN".
+export const to12hTimeStr = (time) => {
+  if (time === null || time === undefined || time === '') return '';
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(time).trim());
+  if (!match) return String(time);
+  const hours = Number(match[1]);
+  if (hours > 23) return String(time);
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
+  return `${hour12}:${match[2]} ${suffix}`;
+};

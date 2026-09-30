@@ -1,6 +1,7 @@
 import {
   getAllPrescriptions,
   getPrescription,
+  verifyPrescription,
   createPrescription,
   updatePrescription,
   deletePrescription,
@@ -11,6 +12,13 @@ import { logAudit, getClientIp } from '../services/auditLog.service.js';
 export const getPrescriptions = async (req, res) => {
   const data = await getAllPrescriptions(req.query);
   return successResponse(res, 200, 'Prescriptions fetched', data);
+};
+
+// Public endpoint used by the QR code on the printed pad. No auth, no audit log
+// entry, and no clinical detail in the response.
+export const getVerifyPrescription = async (req, res) => {
+  const result = await verifyPrescription(req.params.code);
+  return successResponse(res, 200, 'Verification complete', { verification: result });
 };
 
 export const getPrescriptionById = async (req, res) => {
