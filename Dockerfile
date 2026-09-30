@@ -2,8 +2,11 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev || npm install
+# --ignore-scripts: the postinstall hook (prisma/setup.js) is not copied in yet
+# and there is no MongoDB during the build.
+RUN npm ci --omit=dev --ignore-scripts || npm install --omit=dev --ignore-scripts
 COPY . .
+RUN mkdir -p /app/uploads
 
 FROM node:20-alpine AS runtime
 WORKDIR /app
